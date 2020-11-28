@@ -1,0 +1,137 @@
+---
+title: "Barbell lifts performance"
+author: "Patricia Esteban-Infantes"
+date: "27/11/2020"
+output: rmdformats::readthedown
+#output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+## Abstract
+
+The purpose of this project is to produce a model to predict whether someone performs correctly or incorrectly a barbell lift by means of data from accelerometers and machine learning algorithms.
+
+# Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. With this project, we want to predict whether the barbell lifts are performed correctly or not. We will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants, who were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+# Analysis
+
+## Loading and cleaning the data
+
+We download the data from internet and load it to our environment:
+```{r}
+library(caret); library(rpart); library(randomForest); library(e1071); library(rattle)
+sessionInfo()
+urlTraining <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+urlTesting <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(urlTraining, "training.csv")
+download.file(urlTesting, "testing.csv")
+training <- read.csv("training.csv"); testing <- read.csv("testing.csv")
+```
+We take a look at the dimensions and the possible categories, stored in the `classe` variable, in which the barbell lifts can be classified:
+```{r}
+list(Dimensions=data.frame(training=dim(training),testing=dim(testing), row.names = c('N rows','N cols')), 
+     Classes=unique(training$classe))
+```
+We have a large training dataset which constitutes almost the 100% of the data, in comparison to the size of the test set. We will mainly use the `caret` package and will perform a preliminary analysis to look for the most significant variables. We will use cross validation with the training set, performing multiple spliting into training and testing sets to decide which model to use and estimate the out of sample error. In the end, we will use the originally test set as validation set in the Course Project Prediction Quiz.
+
+We clean the training set by removing the first seven variables, because they don't have any significance to the analysis (`r head(names(training),7)`), and then the variables that have more than 50% of missing data. This, by chance, makes the data set to not have any missing value. After that, we perform a near zero variance analysis to check if we can remove more columns before the training of the model.
+
+```{r}
+set.seed(121)
+
+training2 <- training[,-(1:7)]
+missing <- logical(length=ncol(training2))
+
+for(i in 1:ncol(training2)){
+        if (sum(is.na(training2[,i]))/nrow(training2)>0.5)
+                missing[i] <- TRUE
+        else
+                missing[i] <- FALSE
+}
+training2 <- training2[,!missing]
+
+nzv <- nearZeroVar(training2)
+training2 <- training2[,-nzv]
+
+training2$classe <- as.factor(training2$classe)
+
+ncol(training2)
+varNames <- colnames(training2)
+#testing2 <- testing2[,varNames]
+```
+We have reduced the number of variables from 160 to 53, this will reduce the time invested in the training.
+
+## Cross validation
+
+Now we will use cross validation with four folds to estimate the out of sample error, for a couple of models. We check that the five different type of barbell lifts maintain the same percentage in the three training folds as in the global training set.
+```{r}
+folds <- createFolds(training2$classe, k=3, list = T, returnTrain = T)
+data.frame(A=c(sum(training2$classe=="A")/nrow(training2)*100, sum(training2$classe[folds$Fold1]=="A")/nrow(training2[folds$Fold1,])*100, sum(training2$classe[folds$Fold2]=="A")/nrow(training2[folds$Fold2,])*100, sum(training2$classe[folds$Fold3]=="A")/nrow(training2[folds$Fold3,])*100), B=c(sum(training2$classe=="B")/nrow(training2)*100, sum(training2$classe[folds$Fold1]=="B")/nrow(training2[folds$Fold1,])*100, sum(training2$classe[folds$Fold2]=="B")/nrow(training2[folds$Fold2,])*100, sum(training2$classe[folds$Fold3]=="B")/nrow(training2[folds$Fold3,])*100), C=c(sum(training2$classe=="C")/nrow(training2)*100, sum(training2$classe[folds$Fold1]=="C")/nrow(training2[folds$Fold1,])*100, sum(training2$classe[folds$Fold2]=="C")/nrow(training2[folds$Fold2,])*100, sum(training2$classe[folds$Fold3]=="C")/nrow(training2[folds$Fold3,])*100), D=c(sum(training2$classe=="D")/nrow(training2)*100, sum(training2$classe[folds$Fold1]=="D")/nrow(training2[folds$Fold1,])*100, sum(training2$classe[folds$Fold2]=="D")/nrow(training2[folds$Fold2,])*100, sum(training2$classe[folds$Fold3]=="D")/nrow(training2[folds$Fold3,])*100), E=c(sum(training2$classe=="E")/nrow(training2)*100, sum(training2$classe[folds$Fold1]=="E")/nrow(training2[folds$Fold1,])*100, sum(training2$classe[folds$Fold2]=="E")/nrow(training2[folds$Fold2,])*100, sum(training2$classe[folds$Fold3]=="E")/nrow(training2[folds$Fold3,])*100), row.names = c("Percentage Total", "Percentage Fold 1", "Percentage Fold 2", "Percentage Fold 3"))
+```
+As we can see, everything seems correct and we begin the training of the models.
+```{r}
+DecisionTree <- lapply(folds, function(x){
+        training_fold <- training2[x,]
+        test_fold <- training2[-x,]
+        classifier <- rpart(classe~., data=training_fold)
+        y_pred <- predict(classifier, newdata=test_fold, type = "class")
+        conf.matrix <- confusionMatrix(as.factor(test_fold$classe), y_pred)
+        Accuracy <- conf.matrix$overall[1]
+        return(Accuracy)
+})
+AccuracyDecisionTree <- mean(as.numeric(DecisionTree))
+
+RandomForest <- lapply(folds, function(x){
+        training_fold <- training2[x,]
+        test_fold <- training2[-x,]
+        classifier <- randomForest(classe~., data=training_fold, ntree=500)
+        y_pred <- predict(classifier, newdata=test_fold, type = "class")
+        conf.matrix <- confusionMatrix(as.factor(test_fold$classe), y_pred)
+        Accuracy <- conf.matrix$overall[1]
+        return(Accuracy)
+})
+AccuracyRandomForest <- mean(as.numeric(RandomForest))
+
+SVM <- lapply(folds, function(x){
+        training_fold <- training2[x,]
+        test_fold <- training2[-x,]
+        classifier <- svm(classe~., data=training_fold, type="C-classification")
+        y_pred <- predict(classifier, newdata=test_fold, type = "class")
+        conf.matrix <- confusionMatrix(as.factor(test_fold$classe), y_pred)
+        Accuracy <- conf.matrix$overall[1]
+        return(Accuracy)
+})
+AccuracySVM <- mean(as.numeric(SVM))
+
+GBM <- lapply(folds, function(x){
+        training_fold <- training2[x,]
+        test_fold <- training[-x,]
+        classifier <- train(classe~., data=training_fold, method="gbm",verbose=F)
+        y_pred <- predict(classifier, newdata=test_fold)
+        conf.matrix <- confusionMatrix(as.factor(test_fold$classe), y_pred)
+        Accuracy <- conf.matrix$overall[1]
+        return(Accuracy)
+})
+AccuracyGBM <- mean(as.numeric(GBM))
+```
+
+We can see that the model with the highest accuracy for this data is the Random Forest:
+```{r}
+data.frame(DecisionTree=AccuracyDecisionTree, RandomForest=AccuracyRandomForest, SVM=AccuracySVM, GBM=AccuracyGBM, row.names = "Accuracy")
+```
+
+## Results on testing set
+
+Having chosen Random Forest for our data, we use the whole training set for training and perform a prediction on the testing set. We will transform the testing set to keep just the variables we have kept in the training set.
+
+```{r}
+modelRF <- randomForest(classe~., data=training2, ntree=500)
+testing2 <- testing[, colnames(testing) %in% varNames]
+prediction <- predict(modelRF, testing2)
+print(prediction)
+```
